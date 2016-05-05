@@ -2,14 +2,10 @@ package dellcliff.html.react
 
 import scala.scalajs.js.Dynamic
 import scala.scalajs.js.JSConverters._
+import scala.language.implicitConversions
 
-sealed case class Component[Props] private(component: Dynamic) {
-  def apply(props: Props): Element = {
-    Element(Dynamic.global.React.createElement(
-      component,
-      Dynamic.literal(data = props.asInstanceOf[Dynamic])))
-  }
-}
+
+trait NodeOrAttribute
 
 sealed trait Node extends NodeOrAttribute
 
@@ -19,37 +15,17 @@ sealed case class Element(element: Dynamic) extends Node
 
 object Node {
 
-  private def propsToLiteral(attrs: Traversable[Attribute]): Dynamic = {
-    val literal = scala.scalajs.js.Dynamic.literal
-    val props = literal()
-    attrs.foreach {
-      case StringAttribute(key, value) =>
-        props.updateDynamic(key)(value)
-      case StringListAttribute(key, value) =>
-        props.updateDynamic(key)(value.mkString(" "))
-      case AttributeList(key, value) =>
-        val att = literal()
-        value.foreach { case StringAttribute(ikey, ivalue) =>
-          att.updateDynamic(ikey)(ivalue)
-        }
-        props.updateDynamic(key)(att)
-      case attr: FuncAttribute =>
-        props.updateDynamic(attr.key)(attr.value)
-      case other =>
-    }
-    props
-  }
-
   def element(tag: String, attrs: Traversable[Attribute], nodes: Traversable[Node]): Element = {
     val React = Dynamic.global.React
-    val props = propsToLiteral(attrs)
-    def unwrap(e: NodeOrAttribute): Traversable[Dynamic] = e match {
-      case Element(el) => List(el)
-      case Text(text) => List(text.asInstanceOf[Dynamic])
-      case ChildNodesOrAttributes(elements) => elements flatMap unwrap
-      case other => List()
+    val props = Dynamic.literal()
+    for (attr <- attrs)
+      attr.applyProps(props)
+
+    def unwrap(e: Node): Dynamic = e match {
+      case Element(el) => el
+      case Text(text) => text.asInstanceOf[Dynamic]
     }
-    val k = nodes flatMap unwrap
+    val k = nodes map unwrap
     Element(k.size match {
       case 0 => React.createElement(tag, props)
       case 1 => React.createElement(tag, props, k.head)
@@ -57,66 +33,90 @@ object Node {
     })
   }
 
-  implicit class SymbolOps(val tag: Symbol) extends AnyVal {
-    def apply(content: NodeOrAttribute*): Element = tag(content)
+  case class ChildNodesOrAttributes(nodesOrAttributes: Traversable[NodeOrAttribute]) extends NodeOrAttribute
 
-    def apply(content: Traversable[NodeOrAttribute]): Element = {
-      def attributes(nax: Traversable[NodeOrAttribute]): Traversable[Attribute] =
-        nax.flatMap {
-          case attr: Attribute => List(attr)
-          case ChildNodesOrAttributes(k) => attributes(k)
-          case other => List()
-        }
-      def nodes(nax: Traversable[NodeOrAttribute]): Traversable[Node] =
-        nax.flatMap {
-          case node: Node => List(node)
-          case ChildNodesOrAttributes(k) => nodes(k)
-          case other => List()
-        }
-      element(tag.name, attributes(content), nodes(content))
-    }
-  }
+  implicit def nodesToChildNodesOrAttributes(na: Traversable[NodeOrAttribute]): ChildNodesOrAttributes =
+    ChildNodesOrAttributes(na)
 
-  implicit class StringOps(val value: String) extends AnyVal {
-    def text: Text = Text(value)
-
-    def tag(content: NodeOrAttribute*): Element = tag(content)
-
-    def tag(content: Traversable[NodeOrAttribute]): Element =
-      Symbol(value)(content)
-  }
+  implicit def textsToChildNodesOrAttributes(na: Traversable[String]): ChildNodesOrAttributes =
+    ChildNodesOrAttributes(na.map(Text))
 
   implicit class StringContextOps(val sc: StringContext) extends AnyVal {
+
     def text(args: Any*): Text = Text(sc.s(args: _*))
+
   }
 
-  implicit class ElementListOps(val nodes: Traversable[NodeOrAttribute]) extends AnyVal {
-    def include: ChildNodesOrAttributes = ChildNodesOrAttributes(nodes)
+  private def attributes(all: Traversable[NodeOrAttribute]): Traversable[Attribute] =
+    all flatMap {
+      case attr: Attribute => List(attr)
+      case ChildNodesOrAttributes(attrs) => attributes(attrs)
+      case other => List()
+    }
+
+  private def nodes(all: Traversable[NodeOrAttribute]): Traversable[Node] =
+    all flatMap {
+      case node: Node => List(node)
+      case ChildNodesOrAttributes(node) => nodes(node)
+      case other => List()
+    }
+
+  implicit class StringOps(val value: String) extends AnyVal {
+
+    def text: Text = Text(value)
+
+    def apply(content: NodeOrAttribute*): Element =
+      element(value, attributes(content), nodes(content))
+
+    def apply(content: Traversable[NodeOrAttribute]): Element =
+      element(value, attributes(content), nodes(content))
+
+    def tag: Element = element(value, List(), List())
+
+    def tag(content: NodeOrAttribute*): Element =
+      element(value, attributes(content), nodes(content))
+
+    def tag(content: Traversable[NodeOrAttribute]): Element =
+      element(value, attributes(content), nodes(content))
+
   }
+
+  implicit class SymbolOps(val value: Symbol) extends AnyVal {
+
+    def apply(content: NodeOrAttribute*): Element =
+      element(value.name, attributes(content), nodes(content))
+
+    def apply(content: Traversable[NodeOrAttribute]): Element =
+      element(value.name, attributes(content), nodes(content))
+
+    def tag: Element = element(value.name, List(), List())
+
+    def tag(content: NodeOrAttribute*): Element =
+      element(value.name, attributes(content), nodes(content))
+
+    def tag(content: Traversable[NodeOrAttribute]): Element =
+      element(value.name, attributes(content), nodes(content))
+
+  }
+
+  def constant(element: Element): Element =
+    Component(Dynamic.global.React.createClass(Dynamic.literal(
+      render = () => element.element,
+      shouldComponentUpdate = () => false
+    )))(Dynamic.literal())
+
+  implicit def stringToText(text: String): Text = Text(text)
 
   implicit class NativeElementOps(val element: Element) extends AnyVal {
-    def constant: Element =
-      Component(Dynamic.global.React.createClass(Dynamic.literal(
-        render = () => element.element,
-        shouldComponentUpdate = () => false
-      )))(Dynamic.literal())
+
+    def constant: Element = Node.constant(element)
+
   }
 
   implicit class NativeElementFuncOps[Props](val f: Props => Element) extends AnyVal {
-    def component: Component[Props] = {
-      val render: Dynamic => Dynamic =
-        self => f(self.props.data.asInstanceOf[Props]).element
 
-      val shouldComponentUpdate: (Dynamic, Dynamic, Dynamic) => Boolean =
-        (self, nextProps, nextState) => self.props.data != nextProps.data
+    def component: Component[Props] = Component.component(f)
 
-      val literal = scala.scalajs.js.Dynamic.literal
-
-      Component(Dynamic.global.React.createClass(literal(
-        render = render: scalajs.js.ThisFunction,
-        shouldComponentUpdate = shouldComponentUpdate: scalajs.js.ThisFunction
-      )))
-    }
   }
 
 }
