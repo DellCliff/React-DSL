@@ -1,32 +1,31 @@
 package dellcliff.html.react
 
 import scala.scalajs.js.Dynamic
+import scala.util.{Failure, Try, Success}
 
 
-sealed case class Component[Props] private(component: Dynamic) {
-  def apply(props: Props): Element = {
-    Element(Dynamic.global.React.createElement(
-      component,
-      Dynamic.literal(data = props.asInstanceOf[Dynamic])))
+sealed case class Component[Props](component: Try[Dynamic]) {
+
+  def apply(props: Props): Element = component match {
+    case Success(c) =>
+      Element(Try(Dynamic.global.React.createElement(
+        c,
+        Dynamic.literal(data = props.asInstanceOf[Dynamic]))))
+    case ex: Failure[_] => Element(ex)
   }
+
 }
 
 object Component {
 
-  def component[Props](f: Props => Element): Component[Props] = {
-    val render: Dynamic => Dynamic =
-      self => f(self.props.data.asInstanceOf[Props]).element
-
-    val shouldComponentUpdate: (Dynamic, Dynamic, Dynamic) => Boolean =
-      (self, nextProps, nextState) => self.props.data != nextProps.data
-
-    val literal = scala.scalajs.js.Dynamic.literal
-
-    Component(Dynamic.global.React.createClass(literal(
-      render = render: scalajs.js.ThisFunction,
-      shouldComponentUpdate = shouldComponentUpdate: scalajs.js.ThisFunction
-    )))
-  }
+  def component[Props](f: Props => Element): Component[Props] =
+    Component(Try(Dynamic.global.React.createClass(Dynamic.literal(
+      render = { self: Dynamic =>
+        f(self.props.data.asInstanceOf[Props]).element.get
+      }: scalajs.js.ThisFunction,
+      shouldComponentUpdate = { (self: Dynamic, nextProps: Dynamic, nextState: Dynamic) =>
+        self.props.data != nextProps.data
+      }: scalajs.js.ThisFunction
+    ))))
 
 }
-

@@ -3,37 +3,44 @@ package dellcliff.html.react
 import scala.scalajs.js.Dynamic
 import scala.scalajs.js.JSConverters._
 import scala.language.implicitConversions
+import scala.util.Try
 
 
 trait NodeOrAttribute
+
+case class ChildNodesOrAttributes(nodesOrAttributes: Traversable[NodeOrAttribute]) extends NodeOrAttribute
 
 sealed trait Node extends NodeOrAttribute
 
 sealed case class Text(text: String) extends Node
 
-sealed case class Element(element: Dynamic) extends Node
+sealed case class Element(element: Try[Dynamic]) extends Node
 
 object Node {
 
-  def element(tag: String, attrs: Traversable[Attribute], nodes: Traversable[Node]): Element = {
-    val React = Dynamic.global.React
-    val props = Dynamic.literal()
-    for (attr <- attrs)
-      attr.applyProps(props)
-
-    def unwrap(e: Node): Dynamic = e match {
-      case Element(el) => el
-      case Text(text) => text.asInstanceOf[Dynamic]
-    }
-    val k = nodes map unwrap
-    Element(k.size match {
-      case 0 => React.createElement(tag, props)
-      case 1 => React.createElement(tag, props, k.head)
-      case other => React.createElement.bind(null, tag, props).apply(null, k.toJSArray)
+  def element(tag: String, attrs: Traversable[Attribute], nodes: Traversable[Node]): Element =
+    Element(Try {
+      def unwrap(e: Node): Dynamic = e match {
+        case Element(el) => el.get
+        case Text(text) => text.asInstanceOf[Dynamic]
+      }
+      val React = Dynamic.global.React
+      val props = Dynamic.literal()
+      for (attr <- attrs)
+        attr.applyProps(props)
+      val k = nodes map unwrap
+      k.size match {
+        case 0 => React.createElement(tag, props)
+        case 1 => React.createElement(tag, props, k.head)
+        case other => React.createElement.bind(null, tag, props).apply(null, k.toJSArray)
+      }
     })
-  }
 
-  case class ChildNodesOrAttributes(nodesOrAttributes: Traversable[NodeOrAttribute]) extends NodeOrAttribute
+  def constant(element: Element): Element =
+    Component[Unit](Try(Dynamic.global.React.createClass(Dynamic.literal(
+      render = () => element.element.get,
+      shouldComponentUpdate = () => false
+    ))))(Unit)
 
   implicit def nodesToChildNodesOrAttributes(na: Traversable[NodeOrAttribute]): ChildNodesOrAttributes =
     ChildNodesOrAttributes(na)
@@ -98,12 +105,6 @@ object Node {
       element(value.name, attributes(content), nodes(content))
 
   }
-
-  def constant(element: Element): Element =
-    Component(Dynamic.global.React.createClass(Dynamic.literal(
-      render = () => element.element,
-      shouldComponentUpdate = () => false
-    )))(Dynamic.literal())
 
   implicit def stringToText(text: String): Text = Text(text)
 
